@@ -1,0 +1,6 @@
+.env*
+!.env-template
+
+config-*.yaml
+!config-template.yaml
+

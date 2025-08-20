@@ -1,0 +1,19 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "pnpm: buildDev - agent",
+            "type": "shell",
+            "command": "pnpm -F agent run buildDev",
+            "problemMatcher": [],
+            "group": "build"
+        },
+        {
+            "label": "pnpm: buildProd - agent",
+            "type": "shell",
+            "command": "pnpm -F agent run buildProd",
+            "problemMatcher": [],
+            "group": "build"
+        }
+    ]
+}

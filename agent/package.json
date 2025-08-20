@@ -1,0 +1,35 @@
+{
+  "name": "agent",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "buildProd": "npx tsc --outDir buildProd",
+    "buildDev": "npx tsc --outDir buildDev"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google-cloud/secret-manager": "6.1.0",
+    "axios": "1.11.0",
+    "dotenv": "17.2.1",
+    "ethers": "5.7.2",
+    "js-yaml": "4.1.0",
+    "jsonwebtoken": "9.0.2",
+    "ntp-time-sync": "0.4.1",
+    "pg": "8.16.3",
+    "typescript": "5.9.2",
+    "viem": "2.29.3",
+    "yargs": "17.7.2",
+    "zod": "3.23.8"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "4.0.9",
+    "@types/jsonwebtoken": "9.0.10",
+    "@types/node": "24.3.0",
+    "@types/pg": "8.15.5",
+    "@types/yargs": "17.0.33"
+  }
+}

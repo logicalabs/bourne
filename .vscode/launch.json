@@ -1,0 +1,27 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "agent dev run",
+            "preLaunchTask": "pnpm: buildDev - agent",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/agent/buildDev/index.js",
+            "args": ["--configFile=config-dev.yaml"]
+        },
+        {
+            "type": "node",
+            "request": "launch",
+            "name": "agent prod deploy",
+            "preLaunchTask": "pnpm: buildProd - agent",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "program": "${workspaceFolder}/agent/buildProd/index.js",
+            "args": ["--configFile=config-prod.yaml"]
+        }
+    ]
+}   

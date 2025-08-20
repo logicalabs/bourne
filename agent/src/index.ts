@@ -92,9 +92,12 @@ async function sweep_step_registerNewDeposits()
             pt.deposit_id,
             pt.amount AS deposit_amount_raw,
             pt.txhash_deposit,
+            pt.deposit_ts,
+            pt.destination_chain_id,
             tokengroup_fee_capital_bps AS fee_capital_bps,
             CEIL(pt.amount * (tokengroup_fee_capital_bps / 10000)) AS fee_capital_raw,
-            CASE WHEN pt.amount >= tokengroup_fee_service_raw * 2 THEN tokengroup_fee_service_raw ELSE 0 END AS fee_service_raw
+            CASE WHEN pt.amount >= tokengroup_fee_service_raw * 2 THEN tokengroup_fee_service_raw ELSE 0 END AS fee_service_raw,
+            tokens.*
         FROM bourne.proxy_transfers pt
         JOIN tokens ON
             tokens.tokenaddress = pt.asset_address
@@ -109,9 +112,9 @@ async function sweep_step_registerNewDeposits()
 
     for (const row of rows) {
 
-        const depositKey = `${row.proxy_contract.slice(0,4)}_${row.origin_chain_id}_${row.deposit_id}`
+        const depositLabel = getDepositLabel(row)
 
-        print(`%ts ${depositKey} 👀 01 Discovered by Agent - Adding to DB`);
+        print(`%ts ${depositLabel} (${tsDiff(row.deposit_ts)}) 👀 01 Discovered by Agent - Adding to DB`);
 
         var insertQuery = `
             INSERT INTO boxbridges (
@@ -146,6 +149,59 @@ async function sweep_step_registerNewDeposits()
     }
 }
 
+function getDepositLabel({ proxy_contract, deposit_id, origin_chain_id, destination_chain_id, asset_address, deposit_amount_raw, tokensymbol, tokendecimals }:any) {
+    
+    const assetAmountunits = Number(formatUnits(BigInt(deposit_amount_raw), tokendecimals))
+
+    const origChain = vchains[origin_chain_id]
+    const destChain = vchains[destination_chain_id]
+
+    return(`${assetAmountunits} ${tokensymbol} ${origChain?.name.slice(0,3).toLocaleLowerCase()}>${destChain?.name.slice(0,3).toLocaleLowerCase()} #${deposit_id.padStart(3, '0')}` )
+
+}
+
+
+function tsDiff(startTime: number, endTime: number = ntpNow()) {
+
+    if(typeof(startTime)=='object')
+    {
+        try
+        {
+            const date = new Date(startTime);
+            startTime = date.getTime();
+        }
+        catch(error:any)
+        {
+            throw new Error(`tsDiff could not convert startTime from ${startTime}`)
+        }
+    }
+
+    if(typeof(endTime)=='object')
+        {
+            try
+            {
+                const date = new Date(endTime);
+                endTime = date.getTime();
+            }
+            catch(error:any)
+            {
+                throw new Error(`tsDiff could not convert endTime from ${endTime}`)
+            }
+        }
+
+    // asusme seconds were given & normalize to ms if timestamp is super far in the past
+    if(startTime<2000000000) startTime *= 1000
+    if(endTime<2000000000) endTime *= 1000
+
+    const msDiff = (endTime - startTime) * (startTime < 1e12 ? 1000 : 1);
+    const hours = Math.floor(msDiff / 3600000);
+    const minutes = Math.floor((msDiff % 3600000) / 60000);
+    const seconds = Math.floor((msDiff % 60000) / 1000);
+    const milliseconds = msDiff % 1000;
+    return `${hours.toString().padStart(2, ' ')}h ${minutes.toString().padStart(2, ' ')}m ${seconds.toString().padStart(2, ' ')}s`.padStart(10, ' ')
+}
+
+
 async function sweep_step_checkAcknowledgements()
 {
     
@@ -169,7 +225,7 @@ async function sweep_step_checkAcknowledgements()
     for (const event of events) {
         try {
 
-            const depositKey = `${event.proxy_contract.slice(0,4)}_${event.origin_chain_id}_${event.deposit_id}`
+            const depositLabel = getDepositLabel(event)
 
             const transferReceipt = await cbAPI.cbEx_getTransferReceipt(
                 'deposit',
@@ -183,10 +239,10 @@ async function sweep_step_checkAcknowledgements()
             if (!transferReceipt) 
             {
 
-                if(logNoiseLimiter[`${depositKey}cexAck`]<ntpNow()) 
+                if((logNoiseLimiter[`${depositLabel}cexAck`] ?? 0)<ntpNow()) 
                     {
-                        print(`%ts ${depositKey} 🕐 02 CEX Acknowledgement: Waiting...`)
-                        logNoiseLimiter[`${depositKey}cexAck`] = ntpNow()+60_000
+                        print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 02 CEX Deposit: Awaiting acknowledgement...`)
+                        logNoiseLimiter[`${depositLabel}cexAck`] = ntpNow()+60_000
                     }
 
                 continue;
@@ -223,7 +279,7 @@ async function sweep_step_checkAcknowledgements()
                     { transferReceipt }
                 ));
 
-                print(`%ts ${depositKey} ☑️ 02 CEX Acknowledgement: OK`)
+                print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) ☑️ 02 CEX Deposit: Acknowledged in ${tsDiff(event.event_ts)}`)
 
             }
          catch (error) {
@@ -232,8 +288,6 @@ async function sweep_step_checkAcknowledgements()
     }
 
 }
-
-
 
 async function sweep_step_checkConfirmations()
 {
@@ -258,7 +312,7 @@ async function sweep_step_checkConfirmations()
     for (const event of events) {
         try {
 
-            const depositKey = `${event.proxy_contract.slice(0,4)}_${event.origin_chain_id}_${event.deposit_id}`
+            const depositLabel = getDepositLabel(event)
 
             const transferReceipt = await cbAPI.cbEx_getTransferReceipt(
                 'deposit',
@@ -280,15 +334,15 @@ async function sweep_step_checkConfirmations()
                     { transferReceipt }
                 ));
                 
-                print(`%ts ${depositKey} ☑️ 03 CEX Confirmation: OK`)
+                print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) ☑️ 03 CEX Deposit: Confirmed in ${tsDiff(event.event_ts)}`)
             }
             else
             {
                 
-                if(logNoiseLimiter[`${depositKey}cexConf`]<ntpNow()) 
+                if((logNoiseLimiter[`${depositLabel}cexConf`] ?? 0)<ntpNow()) 
                 {
-                    print(`%ts ${depositKey} 🕐 03 CEX Confirmation: Waiting...`)
-                    logNoiseLimiter[`${depositKey}cexConf`] = ntpNow()+60_000
+                    print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 03 CEX Deposit: Awaiting confirmation...`)
+                    logNoiseLimiter[`${depositLabel}cexConf`] = ntpNow()+60_000
                 }
                 
                 continue
@@ -323,9 +377,9 @@ async function sweep_step_requestCexWithdrawals()
     for (const event of events) {
         try {
 
-            const depositKey = `${event.proxy_contract.slice(0,4)}_${event.origin_chain_id}_${event.deposit_id}`
+            const depositLabel = getDepositLabel(event)
 
-            print(`%ts ${depositKey} 🕐 04 CEX Withdrawal: Requesting...`)
+            print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 04 CEX Withdraw: Requesting...`)
 
             const cbTokenSymbol = event.tokensymbol.replace('cbBTC', 'BTC')
 
@@ -440,7 +494,7 @@ async function sweep_step_requestCexWithdrawals()
 
                 await sqlWrite(`${updateQuery} ${insertQuery}`);
 
-                print(`%ts ${depositKey} ☑️ 04 CEX Withdrawal: Requested`)
+                print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) ☑️ 04 CEX Withdraw: Requested in ${tsDiff(event.event_ts)}`)
 
         } catch (error:any) {
             console.error(`Error processing event ${event.event_identifier}:`, error);
@@ -471,7 +525,7 @@ async function sweep_step_confirmCexWithdrawal()
 
     for (const event of events) {
         try {
-            const depositKey = `${event.proxy_contract.slice(0,4)}_${event.origin_chain_id}_${event.deposit_id}`
+            const depositLabel = getDepositLabel(event)
 
             const transferReceipt = await cbAPI.cbEx_getTransferReceipt(
                 'withdrawal',
@@ -485,10 +539,10 @@ async function sweep_step_confirmCexWithdrawal()
 
             if (!transferReceipt.details.crypto_transaction_hash) {
 
-                if(logNoiseLimiter[`${depositKey}cexWdrw`]<ntpNow()) 
+                if((logNoiseLimiter[`${depositLabel}cexWdrw`] ?? 0)<ntpNow()) 
                     {
-                        print(`%ts ${depositKey} 🕐 05 CEX Withdrawal: Confirming`)
-                        logNoiseLimiter[`${depositKey}cexWdrw`] = ntpNow()+60_000
+                        print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 05 CEX Withdraw: Awaiting confirmation...`)
+                        logNoiseLimiter[`${depositLabel}cexWdrw`] = ntpNow()+60_000
                     }
 
                 continue
@@ -523,7 +577,10 @@ async function sweep_step_confirmCexWithdrawal()
                   }
                 }
               } catch (error) {
-                console.error('Failed to decode a log entry:', log, error);
+
+                // this is assumed to be just an unknown log event not related to ERC20 transfers... coinbase can do whatever they want within their txns & often interact with their own contracts
+                // so ignore & move on...
+                //console.error('Failed to decode a log entry:', log, error);
               }
             }
 
@@ -553,7 +610,7 @@ async function sweep_step_confirmCexWithdrawal()
 
                 await sqlWrite(`${updateQuery} ${insertQuery}`);
                 
-                print(`%ts ${depositKey} ☑️ 05 CEX Withdrawal: Confirmed`)
+                print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) ☑️ 05 CEX Withdraw: Confirmed in ${tsDiff(event.event_ts)}`)
 
             }
 
@@ -587,11 +644,10 @@ async function sweep_step_withdrawToRecipient()
         `);
 
     for (const event of events) {
-        const depositKey = `${event.proxy_contract.slice(0,4)}_${event.origin_chain_id}_${event.deposit_id}`
+        const depositLabel = getDepositLabel(event)
         
         try {
-
-            print(`%ts ${depositKey} 🕐 06 Contract Withdraw to Recipient: Requesting`)
+            print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 06 XFer to Recipient: Requesting`)
 
             const destChain = vchains[event.destination_chain_id];
 
@@ -599,7 +655,7 @@ async function sweep_step_withdrawToRecipient()
 
             const writeAccount = privateKeyToAccount(boxConfig.bourneAgentPkey)
 
-            const txReceipt = await contractSimSend(`Withdraw to Recipient `, destChain, {
+            const txReceipt = await contractSimSend(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 📦 06 XFer to Recipient:`, destChain, {
                 account: writeAccount,
                 address: event.proxy_contract,
                 abi: abiTransferProxy,
@@ -613,7 +669,36 @@ async function sweep_step_withdrawToRecipient()
                 ]
             });
 
-            if(!txReceipt) throw new Error(`Withdraw to Recipient - Receipt not found`)
+            if(!txReceipt) throw new Error(`XFer to Recipient - Receipt Not Found!`)
+                
+            if(txReceipt.status!='success')
+            {
+
+                // prevent re-try until investigation done
+                const updateQuery = `
+                    UPDATE boxbridges
+                    SET ignore_note = 'reverted'
+                    WHERE proxy_contract = '${event.proxy_contract}'
+                    AND origin_chain_id = ${event.origin_chain_id}
+                    AND deposit_id = ${event.deposit_id};
+                `;
+
+                const insertQuery = addEventQuery(
+                    event.proxy_contract,
+                    event.origin_chain_id,
+                    event.deposit_id,
+                    'Contract Withdrawal to Recipient Reverted',
+                    'Investigating',
+                    txReceipt.transactionHash,
+                    undefined,
+                    { txReceipt }
+                );
+
+                await sqlWrite(`${updateQuery} ${insertQuery}`);
+
+                print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) ❌ 06 Xfer to Recipient: Reverted in ${tsDiff(event.event_ts)} ❌❌❌`)
+                continue
+            }
 
             const updateQuery = `
                 UPDATE boxbridges
@@ -636,7 +721,7 @@ async function sweep_step_withdrawToRecipient()
 
             await sqlWrite(`${updateQuery} ${insertQuery}`);
             
-            print(`%ts ${depositKey} ☑️ 06 Contract Withdraw to Recipient: Confirmed`)
+            print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) ✅ 06 Xfer to Recipient: Confirmed in ${tsDiff(event.event_ts)} ✅✅✅`)
 
         }
         catch(error:any)

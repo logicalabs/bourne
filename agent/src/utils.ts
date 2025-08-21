@@ -270,7 +270,17 @@ export async function contractSimSend(printLabel: string, chain: vChain, tx: Est
     }
 
     try {
-        const receipt = await chain.cliRead.waitForTransactionReceipt({ hash: txHash, timeout: 60_000, pollingInterval: 5_000 });
+        var receipt 
+        try{
+          receipt = await chain.cliRead.waitForTransactionReceipt({ hash: txHash, timeout: 60_000, pollingInterval: 5_000 });
+        }
+        catch(error:any)
+        {
+          // if waitForTransactionReceipt times out, wait 10 more seconds and try one more time with a direct poll before giving up
+          if(error.message.includes('Timed out')) receipt = await chain.cliRead.getTransactionReceipt({hash: txHash})
+            else throw new Error(error)
+        }
+
         print(`${printLabel} SNT ${receipt.status === 'success' ? '✅  OK: ' : '❌ REV: '}${txHash}`);
         return receipt
     } catch (error: any) {

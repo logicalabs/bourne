@@ -645,29 +645,39 @@ async function sweep_step_withdrawToRecipient()
 
     for (const event of events) {
         const depositLabel = getDepositLabel(event)
-        
-        try {
-            print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 06 XFer to Recipient: Requesting`)
 
-            const destChain = vchains[event.destination_chain_id];
+        const destChain = vchains[event.destination_chain_id];
 
-            if (!destChain) throw new Error('Destination chain not found');
+        if (!destChain) throw new Error('Destination chain not found');
 
-            const writeAccount = privateKeyToAccount(boxConfig.bourneAgentPkey)
+        var txReceipt
+        try
+        {
 
-            const txReceipt = await contractSimSend(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 📦 06 XFer to Recipient:`, destChain, {
-                account: writeAccount,
-                address: event.proxy_contract,
-                abi: abiTransferProxy,
-                functionName: 'withdrawToRecipient',
-                args: [
-                    event.asset_address,
-                    event.recipient_address,
-                    event.withdraw_amount_raw,
-                    event.deposit_id,
-                    event.origin_chain_id
-                ]
-            });
+            if(event.txhash_withdraw==undefined)
+            {
+                print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 06 XFer to Recipient: Requesting`)
+
+                const writeAccount = privateKeyToAccount(boxConfig.bourneAgentPkey)
+
+                txReceipt = await contractSimSend(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 📦 06 XFer to Recipient:`, destChain, {
+                    account: writeAccount,
+                    address: event.proxy_contract,
+                    abi: abiTransferProxy,
+                    functionName: 'withdrawToRecipient',
+                    args: [
+                        event.asset_address,
+                        event.recipient_address,
+                        event.withdraw_amount_raw,
+                        event.deposit_id,
+                        event.origin_chain_id
+                    ]
+                });
+            }
+            else
+            {
+                txReceipt = await destChain.cliRead.getTransactionReceipt({hash: event.txhash_withdraw})
+            }
 
             if(!txReceipt) throw new Error(`XFer to Recipient - Receipt Not Found!`)
                 

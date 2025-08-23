@@ -1,47 +1,30 @@
-import { accessSecretVersion, delay, initUtils, print, sqlRead, sqlWrite, boxStringify, contractSimSend, ntpNow } from "./utils";
-import CoinbaseAPI from "./coinbase.js"
+import { boxConfig, delay, utilsInitialize, print, sqlRead, sqlWrite, boxStringify, contractSimSend, ntpNow } from "./utils";
+import { CoinbaseAPI } from "./coinbase.js"
 import { decodeEventLog, formatUnits } from "viem";
 import { privateKeyToAccount } from 'viem/accounts';
-import { vChainManager } from "./vchains";
+import { vChain, vChainManager } from "./vchains";
 import { abiTransferProxy } from "./abis/TransferProxy";
-import { boxConfigManager } from "./config.js";
 import { abiErc20 } from "./abis/erc20";
+import app from "./api"
 
 let cbAPI:CoinbaseAPI
-let vchains = new vChainManager().vchains
+let vchains:{ [key: number]: vChain }
 
 mainFlow()
 
-var boxConfig: boxConfigManager["config"]
-
-async function cbInit()
-{
-
-    if (!process.env.KEY_FILE_FULL_PATH || !process.env.GCP_PROJECT) {
-        throw new Error('Initialization error: Missing environment variables KEY_FILE_FULL_PATH, GCP_PROJECT');
-    }
-
-    var cbexApiKey = await accessSecretVersion(`cbExBox`, process.env.KEY_FILE_FULL_PATH, process.env.GCP_PROJECT)
-    cbAPI = new CoinbaseAPI(
-        ''
-        ,''
-        ,'ab037f8ee38e54904a9f2edf5e3a7a2d'
-        ,'r6n6gfm06sit'
-        ,cbexApiKey
-        ,boxConfig.cbexAllowedWithdrawAddrs
-        )
-}
-
-
 async function mainFlow()
 {
-    const configManager = await boxConfigManager.getInstance();
-        
-    boxConfig = configManager.config;
+    await utilsInitialize
 
-    await initUtils('Bourne')
+    cbAPI = await CoinbaseAPI.getInstance()
 
-    await cbInit()
+    vchains = await vChainManager.getInstance();
+
+    const PORT = boxConfig.bourneApiPort
+
+    app.listen(PORT, () => {
+        print(`%ts API is listening on port ${PORT}`);
+    });
 
     for(;;)
     {
@@ -94,6 +77,7 @@ async function sweep_step_registerNewDeposits()
             pt.txhash_deposit,
             pt.deposit_ts,
             pt.destination_chain_id,
+            pt.recipient_address,
             tokengroup_fee_capital_bps AS fee_capital_bps,
             CEIL(pt.amount * (tokengroup_fee_capital_bps / 10000)) AS fee_capital_raw,
             CASE WHEN pt.amount >= tokengroup_fee_service_raw * 2 THEN tokengroup_fee_service_raw ELSE 0 END AS fee_service_raw,
@@ -112,7 +96,7 @@ async function sweep_step_registerNewDeposits()
 
     for (const row of rows) {
 
-        const depositLabel = getDepositLabel(row)
+        const depositLabel = depositInitialize(row)
 
         print(`%ts ${depositLabel} (${tsDiff(row.deposit_ts)}) 👀 01 Discovered by Agent - Adding to DB`);
 
@@ -149,15 +133,19 @@ async function sweep_step_registerNewDeposits()
     }
 }
 
-function getDepositLabel({ proxy_contract, deposit_id, origin_chain_id, destination_chain_id, asset_address, deposit_amount_raw, tokensymbol, tokendecimals }:any) {
+function depositInitialize({ proxy_contract, deposit_id, origin_chain_id, destination_chain_id, asset_address, deposit_amount_raw, tokensymbol, tokendecimals, recipient_address }:any) {
     
     const assetAmountunits = Number(formatUnits(BigInt(deposit_amount_raw), tokendecimals))
 
     const origChain = vchains[origin_chain_id]
     const destChain = vchains[destination_chain_id]
 
-    return(`${assetAmountunits} ${tokensymbol} ${origChain?.name.slice(0,3).toLocaleLowerCase()}>${destChain?.name.slice(0,3).toLocaleLowerCase()} #${deposit_id.padStart(3, '0')}` )
 
+    const depositSummary = `${assetAmountunits} ${tokensymbol} ${origChain?.name.slice(0,3).toLocaleLowerCase()}>${destChain?.name.slice(0,3).toLocaleLowerCase()} #${deposit_id.padStart(3, '0')}`
+
+    if(deposit_amount_raw.toString=='5124') throw new Error(`Skipping test ${depositSummary}`)
+
+    return(depositSummary)
 }
 
 
@@ -225,7 +213,7 @@ async function sweep_step_checkAcknowledgements()
     for (const event of events) {
         try {
 
-            const depositLabel = getDepositLabel(event)
+            const depositLabel = depositInitialize(event)
 
             const transferReceipt = await cbAPI.cbEx_getTransferReceipt(
                 'deposit',
@@ -312,7 +300,7 @@ async function sweep_step_checkConfirmations()
     for (const event of events) {
         try {
 
-            const depositLabel = getDepositLabel(event)
+            const depositLabel = depositInitialize(event)
 
             const transferReceipt = await cbAPI.cbEx_getTransferReceipt(
                 'deposit',
@@ -321,7 +309,7 @@ async function sweep_step_checkConfirmations()
                 event.tokensymbol.replace('cbBTC', 'BTC'),
                 cbAPI.cbEx_getNetworkLabel(event.origin_chain_id)
             );
-
+            
             if (transferReceipt.completed_at) {
                 await sqlWrite(addEventQuery(
                     event.proxy_contract,
@@ -377,7 +365,7 @@ async function sweep_step_requestCexWithdrawals()
     for (const event of events) {
         try {
 
-            const depositLabel = getDepositLabel(event)
+            const depositLabel = depositInitialize(event)
 
             print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 04 CEX Withdraw: Requesting...`)
 
@@ -525,7 +513,7 @@ async function sweep_step_confirmCexWithdrawal()
 
     for (const event of events) {
         try {
-            const depositLabel = getDepositLabel(event)
+            const depositLabel = depositInitialize(event)
 
             const transferReceipt = await cbAPI.cbEx_getTransferReceipt(
                 'withdrawal',
@@ -622,6 +610,7 @@ async function sweep_step_confirmCexWithdrawal()
     }
 }
 
+const lastChainWithdrawAttemptTs:any = {}
 
 async function sweep_step_withdrawToRecipient()
 {
@@ -643,8 +632,9 @@ async function sweep_step_withdrawToRecipient()
                 ignore_note is null
         `);
 
+    
     for (const event of events) {
-        const depositLabel = getDepositLabel(event)
+        const depositLabel = depositInitialize(event)
 
         const destChain = vchains[event.destination_chain_id];
 
@@ -656,9 +646,17 @@ async function sweep_step_withdrawToRecipient()
 
             if(event.txhash_withdraw==undefined)
             {
+
+                // sloppy method of avoiding double-spends, which would be very unlikely anyway
+                // dont allow more than 1 withdraw attempt per X, per chain
+                // IE: give a full 60 seconds for a prior attempt to settle before trying a new one
+                if((lastChainWithdrawAttemptTs[destChain.id] ?? 0)<=ntpNow() - 60_000)
+
                 print(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 🕐 06 XFer to Recipient: Requesting`)
 
                 const writeAccount = privateKeyToAccount(boxConfig.bourneAgentPkey)
+
+                lastChainWithdrawAttemptTs[destChain.id] = ntpNow()
 
                 txReceipt = await contractSimSend(`%ts ${depositLabel} (${tsDiff(event.deposit_ts)}) 📦 06 XFer to Recipient:`, destChain, {
                     account: writeAccount,

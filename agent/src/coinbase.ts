@@ -1,10 +1,9 @@
 import axios from 'axios';
 import jwt from 'jsonwebtoken'
 import {ethers} from 'ethers'
-import { print } from './utils.js';
-import { error } from 'console';
+import { print, boxConfig, utilsInitialize, getSecret } from './utils.js';
 
-class CoinbaseAPI {
+export class CoinbaseAPI {
   private apiSIWC_Key: string;
   private apiSIWC_Secret: string;
   private apiExch_Secret: string;
@@ -13,15 +12,16 @@ class CoinbaseAPI {
   private profileId: string;
   private allowedWithdrawAddrs: string[]
 
-  constructor(apiKey: string, apiSecret: string, apiExch_Key: string, apiExch_Passphrase: string, apiExch_Secret: string, allowedWithdrawAddrs: string[]) {
-    this.apiSIWC_Key = apiKey;
-    this.apiSIWC_Secret = apiSecret;
-    this.apiExch_Secret = apiExch_Secret;
-    this.apiExch_Passphrase = apiExch_Passphrase;
-    this.apiExch_Key = apiExch_Key;
-    this.profileId = 'not_initialized';
+  private static _instance: CoinbaseAPI;
 
-    this.allowedWithdrawAddrs = allowedWithdrawAddrs.map(addr => addr.toLowerCase());
+  private constructor(cbApiConfig: any) {
+    this.apiSIWC_Key = cbApiConfig.SIWC_Key ?? '';
+    this.apiSIWC_Secret = cbApiConfig.SIWC_Secret ?? '';
+    this.apiExch_Secret = getSecret('cbApi') ?? '';
+    this.apiExch_Passphrase = cbApiConfig.CBEX_Passphrase ?? '';
+    this.apiExch_Key = cbApiConfig.CBEX_Key ?? '';
+    this.profileId = 'not_initialized';
+    this.allowedWithdrawAddrs = cbApiConfig.AllowedWithdrawTo.map((addr: string) => addr.toLowerCase());
 
     try {
       this.initialize();
@@ -31,12 +31,25 @@ class CoinbaseAPI {
     }
   }
 
+  
+  public static async getInstance(): Promise<CoinbaseAPI> {
+    if (!CoinbaseAPI._instance) {
+        await utilsInitialize;
+
+        CoinbaseAPI._instance = new CoinbaseAPI(boxConfig.cbApi);
+
+        }
+        // Always return the stored instance
+        return CoinbaseAPI._instance;
+  }
+
+
   private async initialize() {
     try {
       const profileResponse:any = await this.apiCall_Exchange('/profiles')
       this.profileId = profileResponse.data[0].id
     } catch (error:any) {
-      throw new Error(`Failed to get profileId from Coinbase API. ${error.message}`);
+      throw new Error(`Coinbase API Health Check Failed. Could not get profile. ${error.message}`);
     }
   }
 
@@ -295,6 +308,9 @@ class CoinbaseAPI {
   public async apiCall_Exchange(requestPath:string, body_json:any = '')
   {
     const timeResponse = await axios.get('https://api.exchange.coinbase.com/time');
+
+    if(timeResponse?.data?.epoch==undefined) throw new Error(`apiCall_Exchange: response epoch empty`)
+
     const cb_access_timestamp = timeResponse.data.epoch.toString();
 
     var method = body_json=='' ? 'GET' : 'POST'
@@ -387,13 +403,8 @@ let axConfig:any = {
         return response
     } catch (error) {
         console.error(error);
-    }
-
-    
+    }    
 }
 
-  // Add more methods for other endpoints (e.g., buy, sell, send, etc.)
 }
-
-export default CoinbaseAPI;
 

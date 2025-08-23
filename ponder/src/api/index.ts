@@ -20,6 +20,68 @@ const safeFormatUnits = (value: any, decimals: number) => {
     }
 };
 
+app.get("/estimate", async (c) => {
+    const origChainId = c.req.query("origChainId");
+    const destChainId = c.req.query("destChainId");
+    const assetAddress = c.req.query("assetAddress");
+    const amount = c.req.query("amount");
+
+    if (!destChainId || !assetAddress || !amount) {
+        throw new Error("Parameters 'origChainId', 'destChainId', 'assetAddress', and 'amount' are required.");
+    }
+
+    const tokenQuery = `
+        SELECT *,
+            CEIL(${amount} * (tokengroup_fee_capital_bps / 10000)) AS fee_capital_raw,
+            CASE WHEN ${amount} >= tokengroup_fee_service_raw * 2 THEN tokengroup_fee_service_raw ELSE 0 END AS fee_service_raw,
+        FROM tokens
+            join token_groups using (tokengroup)
+        WHERE tokenaddress = '${assetAddress}' AND tokenchainid = ${origChainId}
+    `;
+    const tokenInfo = await sqlRead(tokenQuery);
+
+    if (!tokenInfo.length) {
+        throw new Error("Asset information not found for the given asset address and origin chain ID.");
+    }
+
+    const estimation = {
+        fees: {
+            capital: {
+                bps: tokenInfo.tokengroup_fee_capital_bps, 
+                raw: tokenInfo.fee_capital_raw, 
+                units: safeFormatUnits(tokenInfo.fee_capital_raw, tokenInfo.tokendecimals),
+                is_estimate: false,
+            },
+            service: {
+                raw: tokenInfo.fee_service_raw,
+                units: safeFormatUnits(tokenInfo.fee_service_raw, tokenInfo.tokendecimals),
+                is_estimate: false,
+            },
+            exchange: {
+                raw: "1",
+                units: safeFormatUnits("1", tokenInfo.tokendecimals),
+                is_estimate: true,
+            },
+            dest_gas: {
+                raw: "1",
+                units: safeFormatUnits("1", tokenInfo.tokendecimals),
+                is_estimate: true,
+            },
+        },
+        pricing: {
+            dest_gas_price_gwei: 5
+        },
+        params: {
+            origChainId,
+            destChainId,
+            assetAddress,
+            amount,
+        },
+    };
+
+    return c.json(estimation);
+});
+
 
 app.get("/transfers", async (c) => {
     const depositor = c.req.query("depositor")?.toLowerCase();

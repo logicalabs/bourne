@@ -14,8 +14,10 @@
   "dependencies": {
     "@google-cloud/secret-manager": "6.1.0",
     "axios": "1.11.0",
+    "cors": "^2.8.5",
     "dotenv": "17.2.1",
     "ethers": "5.7.2",
+    "express": "^5.1.0",
     "js-yaml": "4.1.0",
     "jsonwebtoken": "9.0.2",
     "ntp-time-sync": "0.4.1",
@@ -26,6 +28,8 @@
     "zod": "3.23.8"
   },
   "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
     "@types/js-yaml": "4.0.9",
     "@types/jsonwebtoken": "9.0.10",
     "@types/node": "24.3.0",

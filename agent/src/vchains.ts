@@ -1,7 +1,6 @@
 import { Chain, PublicClient, WalletClient, createPublicClient, createWalletClient, fallback, http, webSocket, SimulateContractParameters, WriteContractParameters, Account, decodeErrorResult } from "viem";
-import { print } from "./utils.js";
+import { print, utilsInitialize, boxConfig } from "./utils.js";
 import * as chains from 'viem/chains';
-import { boxConfigManager } from "./config.js";
 
 export interface vChain extends Chain {
     cliRead: PublicClient;
@@ -9,28 +8,36 @@ export interface vChain extends Chain {
     cliListen: PublicClient;
 }
 
-
 export class vChainManager {
 
+    private static _instance: vChainManager;
 
     public vchains: { [key: number]: vChain } = {};
 
-    constructor() {
-        this.initializeViemClients();
+    private constructor(boxConfig:any) {
+        this.initializeViemClients(boxConfig);
     }
 
-    private async initializeViemClients() {
-        const configManager = await boxConfigManager.getInstance();
-        
-        const boxConfig = configManager.config;
+    public static async getInstance(): Promise<{ [key: number]: vChain }> {
 
+        if (!vChainManager._instance) {
+            await utilsInitialize;
+    
+            vChainManager._instance = new vChainManager(boxConfig.chains);
+            }
+
+            // always return the vchains of the stored instance
+            return vChainManager._instance.vchains;
+      }
+
+    private async initializeViemClients(_chains:any) {
         const self = this;
         const allChains = Object.values(chains);
         const promises = allChains.map(async (chain) => {
             const chainId = chain.id;
-            const rpcUrls = boxConfig.chains[chainId];
 
-            if (!rpcUrls) {
+            // even if its a chain in viem that doesnt exist in our config (& thus is not relevant to our app), add placeholders for it anyway
+            if (!_chains[chainId]) {
                 this.vchains[chainId] = {
                     ...chain,
                     //@ts-ignore
@@ -42,6 +49,8 @@ export class vChainManager {
                 };
                 return;
             }
+
+            const rpcUrls = _chains[chainId];
 
             if (!rpcUrls.rpc_urls_read.length || !rpcUrls.rpc_urls_write.length || !rpcUrls.rpc_urls_listen.length) {
                 throw new Error(`initializeViemClients: Chain with ID ${chainId} must have at least one URL for read, write, and listen`);
@@ -73,6 +82,6 @@ export class vChainManager {
         });
         
         await Promise.all(promises);
-        print(`%ts Viem Clients Initialized for ${Object.keys(boxConfig.chains).length} chains`);
+        print(`%ts Viem Clients Initialized for ${Object.keys(_chains).length} chains`);
     }
 }

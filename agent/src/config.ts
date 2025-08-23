@@ -13,17 +13,23 @@ export class boxConfigManager {
 
     // 2. Private constructor to prevent direct instantiation
     private constructor(argv: any, config: any) {
-        this.argv = argv;
-        this.config = config;
+        Object.assign(this, { ...config, argv });
     }
 
     /**
      * Public static method to get the single instance of boxConfigManager.
      * It performs the configuration loading and validation only once.
      * @param zodSchema Optional Zod schema for configuration validation.
-     * @returns A promise that resolves to the single, fully initialized boxConfigManager instance.
+     * @returns A promise that resolves to the single, fully initialized boxConfigManager instance. 
+     * If an existing instance has already been spawned for the application due to a prior construction, then *that* instance will be returned.
      */
     public static async getInstance(zodSchema: ZodSchema | undefined = undefined): Promise<boxConfigManager> {
+
+        if (process.argv.includes('--buildOnly')) {
+            console.log('Build completed.');
+            process.exit();
+        }
+
         // If an instance doesn't exist, create and initialize it
         if (!boxConfigManager._instance) {
             // 1. Parse command-line arguments to get the config file path.
@@ -66,6 +72,11 @@ export class boxConfigManager {
             
             // 5. Create the single instance and store it
             boxConfigManager._instance = new boxConfigManager(argv, validatedConfig);
+
+            const isDev = configFilePath.includes('dev');
+            const color = isDev ? '\x1b[33m' : '\x1b[38;5;208m'; // Yellow for dev, Orange for prod
+            const envEmoji = isDev ? '🛠️' : '🚀';
+            console.log(`${color}${envEmoji} boxConfig loaded: ${configFilePath}\x1b[0m`);
         }
         // Always return the stored instance
         return boxConfigManager._instance;

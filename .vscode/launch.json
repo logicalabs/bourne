@@ -21,7 +21,7 @@
                 "<node_internals>/**"
             ],
             "program": "${workspaceFolder}/agent/buildProd/index.js",
-            "args": ["--configFile=config-prod.yaml"]
+            "args": ["--buildOnly"]
         }
     ]
 }   

@@ -1,11 +1,12 @@
 
 import { NtpTimeSync } from "ntp-time-sync";
 import os from 'os';
-import { Client } from 'pg';
+import { Client, QueryConfig, QueryResult } from 'pg';
 import { vChain } from "./vchains";
 import * as dotenv from 'dotenv';
 import { SecretManagerServiceClient } from '@google-cloud/secret-manager';
 import { decodeErrorResult, EstimateContractGasParameters, WriteContractParameters } from "viem";
+import { boxConfigManager } from './config.js';
 
 dotenv.config();
 
@@ -17,16 +18,57 @@ export var ts_startUp = ntpNow()
 
 export const hostname = os.hostname().replace('hostname', '').toUpperCase()
 
+export var boxConfig:any
 
-export async function initUtils(processName: string)
-{
-    initNTPtimeSync()
+// Random string since we use this for runtime in-mem de/scrambling. nothing that needs to persist.
+const XOR_KEY = Math.random().toString(36).substring(2, 15); 
 
-    ts_startUp = ntpNow() ?? Date.now()
-
-    print(`%ts Process Started: ${processName}   Host: ${hostname}`)
+export function scramble(value: string): string {
+    let result = '';
+    for (let i = 0; i < value.length; i++) {
+        result += String.fromCharCode(value.charCodeAt(i) ^ XOR_KEY.charCodeAt(i % XOR_KEY.length));
+    }
+    return result;
 }
 
+export function descramble(scrambledValue: string): string {
+    let result = '';
+    for (let i = 0; i < scrambledValue.length; i++) {
+        result += String.fromCharCode(scrambledValue.charCodeAt(i) ^ XOR_KEY.charCodeAt(i % XOR_KEY.length));
+    }
+    return result;
+}
+
+const secrets = new Map<string, string>();
+
+export function getSecret(entityName: string): string | undefined {
+  const scrambledSecret = secrets.get(entityName);
+  if (scrambledSecret) {
+      return descramble(scrambledSecret);
+  }
+  return undefined;
+}
+
+export const utilsInitialize = (async () => {
+  try {
+      initNTPtimeSync();
+
+      boxConfig = await boxConfigManager.getInstance();
+
+      for (const { Entity, KeyLabel } of boxConfig.gcpKeyRing) {
+        const secret = await accessSecretVersion(KeyLabel, boxConfig.gcpKeyFilePath, boxConfig.gcpProject);
+        const scrambledSecret = scramble(secret);
+        secrets.set(Entity, scrambledSecret);
+      }
+
+        ts_startUp = ntpNow() ?? Date.now()
+
+      return true;
+  } catch (error:any) {
+      console.error("utilsInitialize err", error);
+      return false;
+  }
+})();
 
 async function initNTPtimeSync()
 {
@@ -103,30 +145,57 @@ const client = new Client({
 
 client.connect();
 
-export const sqlWrite = async (query: string) => {
+// can run a direct sql string (not injection safe) or a QueryConfig prepared via safeSql
+export const sqlWrite = async (query: string | QueryConfig): Promise<any[] | undefined> => {
   try {
+    // Start a transaction
     await client.query('BEGIN');
-    const res = await client.query(query);
+
+    const res: QueryResult = await client.query(query);
+
+    // Commit the transaction
     await client.query('COMMIT');
 
+    // Return rows if it was an INSERT command and rows exist, otherwise undefined
     return res.command === 'INSERT' && res.rows.length ? res.rows : undefined;
   } catch (err) {
+    // Rollback the transaction in case of an error
     await client.query('ROLLBACK');
     console.error('SQL Write Error:', err);
-    throw err;
+    throw err; // Re-throw the error for upstream handling
   }
 };
 
-export const sqlRead = async (query: string) => {
+// A simple helper function to safely process template literals
+export function safeSql(strings: TemplateStringsArray, ...params: any[]): QueryConfig {
+  const queryParts: string[] = [];
+  const values: any[] = [];
+
+  for (let i = 0; i < strings.length; i++) {
+    queryParts.push(strings[i] ?? '');
+    if (i < params.length) {
+      queryParts.push(`$${values.length + 1}`);
+      values.push(params[i]);
+    }
+  }
+
+  const queryString = queryParts.join('');
+
+  return {
+    text: queryString,
+    values: values,
+  };
+}
+
+export const sqlRead = async <T = any>(query: string | QueryConfig): Promise<T[]> => {
   try {
     const res = await client.query(query);
-    return res.rows;
+    return res.rows as T[];
   } catch (err) {
     console.error('SQL Read Error:', err);
     throw err;
   }
 };
-
 
 export const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -243,7 +312,10 @@ export async function contractSimSend(printLabel: string, chain: vChain, tx: Est
         const rawGasPriceFromRpc = await gasPricePromise;
         
         // todo: config var?
-        const gasPriceMult = 1.02;
+        var gasPriceMult = 1.025;
+
+        if(chain.id == 42161) gasPriceMult = 1.15; 
+
         tx.gasPrice = BigIntMult(rawGasPriceFromRpc, gasPriceMult)
  
         const safetyMult = 1.30;   
@@ -277,7 +349,11 @@ export async function contractSimSend(printLabel: string, chain: vChain, tx: Est
         catch(error:any)
         {
           // if waitForTransactionReceipt times out, wait 10 more seconds and try one more time with a direct poll before giving up
-          if(error.message.includes('Timed out')) receipt = await chain.cliRead.getTransactionReceipt({hash: txHash})
+          if(error.message.includes('Timed out')) 
+            {
+              await delay(15_000)
+              receipt = await chain.cliRead.getTransactionReceipt({hash: txHash})
+            }
             else throw new Error(error)
         }
 
